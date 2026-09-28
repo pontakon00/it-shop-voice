@@ -65,6 +65,14 @@ export type CartLine = {
   quantity: number;
 };
 
+/** ผลลัพธ์มาจากสินค้าในฐานข้อมูล หรือถูก AI ตอบแทนเมื่อค้นไม่เจอ */
+export type AnswerSource = "database" | "json" | "ai" | "none";
+
+export type AiAnswer = {
+  answer: string;
+  suggestions: string[];
+};
+
 export type VoiceResponse = {
   transcript: string;
   intent: Intent;
@@ -77,4 +85,8 @@ export type VoiceResponse = {
   results: ProductMatch[];
   totalResults: number;
   suggestion: string[];
+  /** แหล่งที่มาของคำตอบ — ใช้แสดงป้ายในหน้าเว็บ */
+  source: AnswerSource;
+  /** มีเฉพาะเมื่อ source เป็น "ai" */
+  aiAnswer?: AiAnswer;
 };

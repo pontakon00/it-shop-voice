@@ -1,12 +1,26 @@
 import { NextResponse } from "next/server";
-import { CATEGORY_LABELS, resolveTarget, searchProducts, SAMPLE_COMMANDS } from "@/src/lib/catalog";
+import { askAiFallback, type AiAnswer } from "@/src/lib/aiFallback";
+import { SAMPLE_COMMANDS } from "@/src/lib/catalog";
+import { CATEGORY_LABELS } from "@/src/lib/matching";
 import { parseCommand } from "@/src/lib/nlu";
-import type { VoiceResponse } from "@/src/lib/types";
+import { resolveTarget, searchProducts } from "@/src/lib/productRepository";
+import type { AnswerSource, VoiceResponse } from "@/src/lib/types";
 
 const MAX_TEXT_LENGTH = 200;
+const MAX_MATCHES = 50;
+const DISPLAY_MATCHES = 8;
 
-function respond(payload: Omit<VoiceResponse, "transcript"> & { transcript?: string }): NextResponse<VoiceResponse> {
-  return NextResponse.json({ transcript: payload.transcript ?? "", ...payload });
+type Payload = Omit<VoiceResponse, "transcript" | "source"> & {
+  transcript?: string;
+  source?: AnswerSource;
+};
+
+function respond(payload: Payload): NextResponse<VoiceResponse> {
+  return NextResponse.json({
+    transcript: payload.transcript ?? "",
+    source: "none" as AnswerSource,
+    ...payload,
+  });
 }
 
 export async function POST(request: Request): Promise<NextResponse<VoiceResponse>> {
@@ -120,14 +134,14 @@ export async function POST(request: Request): Promise<NextResponse<VoiceResponse
 
     case "add":
     case "remove": {
-      const target = resolveTarget(command.query);
+      const found = await resolveTarget(command.query);
       const isAdd = command.intent === "add";
 
-      if (!target) {
+      if (!found) {
         return respond({
           transcript: text,
           intent: command.intent,
-          reply: `ยังไม่แน่ใจว่าหมายถึงสินค้าตัวไหนครับ ลองพูดชื่อที่ชัดเจนกว่านี้อีกครั้ง`,
+          reply: "ยังไม่แน่ใจว่าหมายถึงสินค้าตัวไหนครับ ลองพูดชื่อที่ชัดเจนกว่านี้อีกครั้ง",
           confidence: command.confidence,
           query: command.query,
           quantity: command.quantity,
@@ -139,6 +153,7 @@ export async function POST(request: Request): Promise<NextResponse<VoiceResponse
         });
       }
 
+      const { match: target, source } = found;
       const qty = isAdd ? Math.max(1, command.quantity) : 1;
       const stockNote = target.product.stock === 0 ? " (สินค้าหมดชั่วคราว)" : "";
       const line = isAdd
@@ -156,6 +171,7 @@ export async function POST(request: Request): Promise<NextResponse<VoiceResponse
         sort: command.sort,
         results: [target],
         totalResults: 1,
+        source,
         suggestion: [isAdd ? "ดูตะกร้า" : "เพิ่มหูฟัง TWS Pro ลงตะกร้า", "สรุปราคา"],
       });
     }
@@ -185,9 +201,8 @@ export async function POST(request: Request): Promise<NextResponse<VoiceResponse
         });
       }
 
-      const allMatches = searchProducts(command, 50);
-      const results = allMatches.slice(0, 8);
-      const total = allMatches.length;
+      const { matches, total, source } = await searchProducts(command, MAX_MATCHES);
+      const results = matches.slice(0, DISPLAY_MATCHES);
 
       const conditions: string[] = [];
       if (command.budget.max !== undefined) {
@@ -201,12 +216,27 @@ export async function POST(request: Request): Promise<NextResponse<VoiceResponse
       const conditionText = conditions.length > 0 ? ` (${conditions.join(", ")})` : "";
       const subject = command.query ? `ที่ตรงกับ "${command.query}"` : "ตามที่คุณบอก";
 
+      // ไม่พบสินค้าในฐานข้อมูล → ส่งให้ n8n → Groq ตอบแทน แทนที่จะตอบว่า "ไม่พบ"
+      let answerSource: AnswerSource = source;
+      let aiAnswer: AiAnswer | undefined;
+
+      if (total === 0 && command.query) {
+        const ai = await askAiFallback({ query: command.query, transcript: text });
+        if (ai) {
+          answerSource = "ai";
+          aiAnswer = ai;
+        } else {
+          answerSource = "none";
+        }
+      }
+
       const reply =
-        total === 0
+        aiAnswer?.answer ??
+        (total === 0
           ? `ไม่พบสินค้า${subject}${conditionText} ลองเปลี่ยนคำค้นหรือพูดชื่อหมวดอื่นดูครับ`
           : total === 1
             ? `พบสินค้า 1 รายการ${subject}${conditionText} ครับ`
-            : `พบ ${total} รายการ${subject}${conditionText} แสดงให้ดู ${results.length} รายการแรกครับ`;
+            : `พบ ${total} รายการ${subject}${conditionText} แสดงให้ดู ${results.length} รายการแรกครับ`);
 
       return respond({
         transcript: text,
@@ -219,10 +249,14 @@ export async function POST(request: Request): Promise<NextResponse<VoiceResponse
         sort: command.sort,
         results,
         totalResults: total,
+        source: answerSource,
+        aiAnswer,
         suggestion:
-          total > 0
-            ? [`เพิ่ม ${results[0].product.name} ลงตะกร้า`, "ดูตะกร้า", "สรุปราคา"]
-            : SAMPLE_COMMANDS.slice(0, 3),
+          aiAnswer && aiAnswer.suggestions.length > 0
+            ? aiAnswer.suggestions
+            : total > 0
+              ? [`เพิ่ม ${results[0].product.name} ลงตะกร้า`, "ดูตะกร้า", "สรุปราคา"]
+              : SAMPLE_COMMANDS.slice(0, 3),
       });
     }
   }

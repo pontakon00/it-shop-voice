@@ -1,0 +1,163 @@
+import { normalize } from "./nlu";
+import type { Budget, Category, Product, ProductMatch, SortKey } from "./types";
+
+/** ป้ายภาษาไทยของแต่ละหมวด ใช้ทั้งในคำตอบและเหตุผลที่ระบบนับคะแนน */
+export const CATEGORY_LABELS: Record<Category, string> = {
+  audio: "เสียง",
+  computer: "คอมพิวเตอร์",
+  display: "จอภาพ",
+  laptop: "โน้ตบุ๊ก",
+  tablet: "แท็บเล็ต",
+  wearable: "นาฬิกาอัจฉริยะ",
+  accessory: "อุปกรณ์เสริม",
+  storage: "สตอเรจ",
+  appliance: "เครื่องใช้ไฟฟ้า",
+};
+
+/** Dice coefficient บน bigram ตัวอักษร — รองรับภาษาไทยที่ไม่มีช่องว่างระหว่างคำ */
+function bigrams(value: string): Set<string> {
+  const chars = Array.from(value.replace(/\s+/g, ""));
+  const pairs = new Set<string>();
+  if (chars.length === 1) return new Set([chars[0]]);
+
+  for (let i = 0; i < chars.length - 1; i += 1) {
+    pairs.add(chars[i] + chars[i + 1]);
+  }
+  return pairs;
+}
+
+function similarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.8;
+
+  const left = bigrams(a);
+  const right = bigrams(b);
+  if (left.size === 0 || right.size === 0) return 0;
+
+  let shared = 0;
+  left.forEach((pair) => {
+    if (right.has(pair)) shared += 1;
+  });
+
+  return (2 * shared) / (left.size + right.size);
+}
+
+type TermScore = { score: number; reason?: string };
+
+/** หาสัญญาณที่แรงที่สุดของคำค้นหนึ่งคำเมื่อเทียบกับสินค้าหนึ่งรายการ */
+function scoreTerm(term: string, product: Product, name: string, brand: string, keywords: string[]): TermScore {
+  if (name === term) return { score: 40, reason: `ชื่อตรงกับ "${term}"` };
+  if (brand === term) return { score: 30, reason: `ตรงกับแบรนด์ ${product.brand}` };
+
+  if (keywords.includes(term)) {
+    const keyword = product.keywords[keywords.indexOf(term)];
+    return { score: 30, reason: `ตรงกับคำสำคัญ "${keyword}"` };
+  }
+
+  let best: TermScore = { score: 0 };
+
+  if (name.includes(term)) best = { score: 25, reason: `ชื่อสินค้ามี "${term}"` };
+
+  if (best.score < 20) {
+    for (const [index, keyword] of keywords.entries()) {
+      if (keyword.includes(term) || term.includes(keyword)) {
+        best = { score: 18, reason: `"${product.keywords[index]}" สอดคล้องกับ "${term}"` };
+        break;
+      }
+    }
+  }
+
+  if (best.score === 0) {
+    const candidates = [name, ...keywords];
+    for (const candidate of candidates) {
+      const ratio = similarity(term, candidate);
+      if (ratio >= 0.75) return { score: 45, reason: "ใกล้เคียงมาก (รองรับคำพิมพ์ผิด)" };
+      if (ratio >= 0.6 && best.score < 20) {
+        best = { score: 20, reason: "ใกล้เคียงคำค้น (รองรับคำพิมพ์ผิด)" };
+      }
+    }
+  }
+
+  return best;
+}
+
+/** คะแนนความเข้ากันของคำค้นหนึ่งคำกับสินค้าหนึ่งรายการ พร้อมเหตุผลที่อธิบายได้ */
+export function scoreProduct(query: string, product: Product): { score: number; reasons: string[] } {
+  if (!query) return { score: 0, reasons: [] };
+
+  const name = normalize(product.name);
+  const brand = normalize(product.brand);
+  const keywords = product.keywords.map(normalize);
+  const terms = query.split(" ").filter(Boolean);
+  const reasons: string[] = [];
+
+  let score = 0;
+  for (const term of terms) {
+    const termScore = scoreTerm(term, product, name, brand, keywords);
+    score += termScore.score;
+    if (termScore.reason && !reasons.includes(termScore.reason)) reasons.push(termScore.reason);
+  }
+
+  // โบนัสเมื่อคำค้นทั้งวลีไปตรงกับชื่อสินค้า เช่น "หูฟัง tws pro"
+  if (terms.length > 1 && name.includes(query)) {
+    score += 50;
+    reasons.unshift("ชื่อสินค้าตรงกับคำค้น");
+  }
+
+  return { score, reasons: reasons.slice(0, 2) };
+}
+
+const SORTERS: Record<SortKey, (a: ProductMatch, b: ProductMatch) => number> = {
+  relevance: (a, b) => b.score - a.score || b.product.rating - a.product.rating,
+  price_asc: (a, b) => a.product.price - b.product.price,
+  price_desc: (a, b) => b.product.price - a.product.price,
+  rating: (a, b) => b.product.rating - a.product.rating || b.product.reviewCount - a.product.reviewCount,
+  newest: (a, b) => b.product.releasedAt.localeCompare(a.product.releasedAt),
+};
+
+export function sortMatches(matches: ProductMatch[], sort: SortKey): ProductMatch[] {
+  return [...matches].sort(SORTERS[sort]);
+}
+
+export function withinBudget(price: number, budget: Budget): boolean {
+  return (budget.min === undefined || price >= budget.min) && (budget.max === undefined || price <= budget.max);
+}
+
+export type RankOptions = {
+  query: string;
+  category?: Category;
+  sort?: SortKey;
+  limit?: number;
+};
+
+/**
+ * ให้คะแนนและจัดอันดับสินค้าที่ผ่านการกรองหมวด/งบมาแล้ว
+ *
+ * ใช้ร่วมกันได้ทั้งเส้นทางที่อ่านจาก MySQL และจาก JSON
+ * ทำให้ผลลัพธ์ของสองแหล่งข้อมูลตรงกันเสมอ
+ */
+export function rankProducts(products: Product[], { query, category, sort = "relevance", limit = 8 }: RankOptions): ProductMatch[] {
+  const browseAll = query.length === 0;
+
+  const matches = products.map((product) => {
+    const { score, reasons } = scoreProduct(query, product);
+
+    if (score > 0) return { product, score, reasons };
+    if (category) {
+      return { product, score: 10, reasons: [`อยู่ในหมวด${CATEGORY_LABELS[category]}`] };
+    }
+    return { product, score: 0, reasons: [] };
+  });
+
+  return sortMatches(matches.filter((match) => browseAll || match.score > 0), sort).slice(0, limit);
+}
+
+/** ต่ำกว่านี้ถือว่าไม่มั่นใจพอจะสั่งซื้อ/สั่งลบสินค้ารายการนั้น */
+export const MIN_TARGET_SCORE = 40;
+
+/** หาสินค้าที่ผู้ใช้ตั้งใจจะสั่งซื้อ/สั่งลบ — คืน null ถ้าไม่มั่นใจพอ */
+export function pickBestTarget(query: string, candidates: Product[]): ProductMatch | null {
+  const [best] = rankProducts(candidates, { query, limit: 1 });
+  return best && best.score >= MIN_TARGET_SCORE ? best : null;
+}

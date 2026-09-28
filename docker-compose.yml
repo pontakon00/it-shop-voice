@@ -1,0 +1,35 @@
+# ShopVoice — ฐานข้อมูล MySQL สำหรับ dev
+#
+# เริ่มใช้งาน:
+#   docker compose up -d
+#
+# เมื่อครั้งแรก container จะรัน db/schema.sql และ db/seed.sql ให้อัตโนมัติ
+# ถ้าต้องการล้างข้อมูลแล้วเริ่มใหม่:
+#   docker compose down -v && docker compose up -d
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: shopvoice-mysql
+    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: shopvoice
+      MYSQL_USER: shopvoice
+      MYSQL_PASSWORD: shopvoice
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  mysql-data:

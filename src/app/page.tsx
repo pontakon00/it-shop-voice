@@ -1,20 +1,24 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { AiAnswerCard } from "@/src/components/AiAnswerCard";
 import { CartDrawer } from "@/src/components/CartDrawer";
 import { CheckoutSummary } from "@/src/components/CheckoutSummary";
 import { ConversationLog, type LogEntry } from "@/src/components/ConversationLog";
 import { ProductCard } from "@/src/components/ProductCard";
+import { SourceBadge } from "@/src/components/SourceBadge";
 import { SuggestionChips } from "@/src/components/SuggestionChips";
 import { VoicePanel } from "@/src/components/VoicePanel";
 import { SAMPLE_COMMANDS } from "@/src/lib/catalog";
 import { useCart } from "@/src/hooks/useCart";
 import { useSpeechRecognition } from "@/src/hooks/useSpeechRecognition";
-import type { Product, ProductMatch, VoiceResponse } from "@/src/lib/types";
+import type { AiAnswer, AnswerSource, Product, ProductMatch, VoiceResponse } from "@/src/lib/types";
 
 export default function Home() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [matches, setMatches] = useState<ProductMatch[]>([]);
+  const [answerSource, setAnswerSource] = useState<AnswerSource>("none");
+  const [aiAnswer, setAiAnswer] = useState<AiAnswer | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>(SAMPLE_COMMANDS);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,6 +43,8 @@ export default function Home() {
   const handleResponse = useCallback(
     (data: VoiceResponse) => {
       const [first] = data.results;
+      setAnswerSource(data.source);
+      setAiAnswer(data.aiAnswer ?? null);
 
       switch (data.intent) {
         case "search":
@@ -198,9 +204,14 @@ export default function Home() {
 
       <ConversationLog entries={entries} />
 
+      {aiAnswer && <AiAnswerCard answer={aiAnswer} />}
+
       {matches.length > 0 && (
         <section aria-label="ผลการค้นหา" className="space-y-3">
-          <h2 className="text-sm font-semibold text-slate-300">ผลการค้นหา ({matches.length})</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-300">ผลการค้นหา ({matches.length})</h2>
+            <SourceBadge source={answerSource} />
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {matches.map((match) => (
               <ProductCard
@@ -215,7 +226,7 @@ export default function Home() {
       )}
 
       <footer className="mt-auto pt-2 text-center text-xs text-slate-500">
-        Next.js 16 · React 19 · Tailwind CSS 4 · Web Speech API (รองรับภาษาไทย)
+        Next.js 16 · React 19 · TypeScript · MySQL · n8n · Groq AI · Web Speech API
       </footer>
 
       <CartDrawer
