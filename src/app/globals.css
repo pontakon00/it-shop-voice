@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), var(--font-thai), "Noto Sans Thai", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+
+  --color-ink-950: #070a12;
+  --color-ink-900: #0b1020;
+  --color-ink-850: #101830;
+  --color-ink-800: #16203c;
+  --color-ink-700: #1f2b4d;
+  --color-ink-600: #2c3a63;
+
+  --color-brand-300: #8ec5ff;
+  --color-brand-400: #5aa9ff;
+  --color-brand-500: #2f8bff;
+  --color-brand-600: #1a6ce0;
+  --color-brand-700: #1454b4;
+
+  --color-mint-400: #4ee0a8;
+  --color-coral-400: #ff7a6b;
+  --color-amber-400: #ffc44d;
+
+  --animate-ring: ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-rise: rise 0.35s ease-out both;
+}
+
+@keyframes ring {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    min-height: 100dvh;
+    background-color: var(--color-ink-950);
+    background-image:
+      radial-gradient(60rem 40rem at 12% -8%, color-mix(in oklab, var(--color-brand-600) 28%, transparent), transparent 60%),
+      radial-gradient(48rem 36rem at 92% 4%, color-mix(in oklab, var(--color-mint-400) 16%, transparent), transparent 55%);
+    background-attachment: fixed;
+    color: #e8edf7;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand-400);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: color-mix(in oklab, var(--color-ink-850) 78%, transparent);
+    backdrop-filter: blur(14px);
+    border: 1px solid color-mix(in oklab, var(--color-ink-600) 60%, transparent);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
