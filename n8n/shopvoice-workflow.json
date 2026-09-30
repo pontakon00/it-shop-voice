@@ -1,4 +1,5 @@
 {
+  "id": "shopvoice-ask",
   "name": "ShopVoice — AI Fallback (Groq)",
   "nodes": [
     {
@@ -37,13 +38,11 @@
       "parameters": {
         "method": "POST",
         "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.GROQ_API_KEY }}"
-            },
             {
               "name": "Content-Type",
               "value": "application/json"
@@ -65,7 +64,13 @@
         160,
         300
       ],
-      "notes": "ต้องตั้ง GROQ_API_KEY ในไฟล์ .env ของ n8n ก่อน"
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "shopvoice-groq-credential",
+          "name": "Groq API"
+        }
+      },
+      "notes": "ต้องเลือก credential แบบ Header Auth ชื่อ \"Groq API\" (Name: Authorization, Value: Bearer gsk_...) — หลัง import โหนดนี้จะขึ้นว่า credential หายไป กดเลือกใหม่ในหน้า workflow"
     },
     {
       "parameters": {

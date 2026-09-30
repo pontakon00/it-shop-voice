@@ -34,7 +34,7 @@
 └─────┼───────────────────────────────────────────────┼────┘
       │ พบสินค้า                                    │ ไม่พบสินค้า
       ▼                                               ▼
- source: "mysql" | "json"                    ┌──────────────────┐
+  source: "database" | "json"                 ┌──────────────────┐
  คะแนน + เหตุผลที่ตรงกัน                    │  n8n (Webhook)   │
                                              │  Build Prompt    │
                                              │      ↓           │
@@ -139,7 +139,7 @@ workflow `n8n/shopvoice-workflow.json` มี 5 จุด:
 | --- | --- |
 | **Webhook** | รับ `{ query, profile }` |
 | **Build Prompt** | ประกอบ `system` + `user` message จาก `profile` (ไม่ hardcode โดเมน) |
-| **Call Groq API** | `llama-3.3-70b-versatile`, `temperature 0.3`, `response_format: json_object` |
+| **Call Groq API** | `llama-3.3-70b-versatile`, `temperature 0.3`, `response_format: json_object` — ยิงผ่าน HTTP Request node ที่ใช้ Header Auth credential |
 | **Parse Answer** | แกะ JSON → `{ answer, suggestions }` |
 | **Respond to Webhook** | คืน `{ answer, suggestions, model }` |
 
@@ -163,7 +163,7 @@ curl -X POST http://localhost:3000/api/voice \
 ```jsonc
 {
   "intent": "search",
-  "source": "ai",                    // ← ไม่ใช่ mysql/json
+  "source": "ai",                    // ← ไม่ใช่ database/json
   "totalResults": 0,
   "aiAnswer": {
     "answer": "...",                // คำตอบจาก Groq
@@ -198,7 +198,7 @@ export const ACTIVE_PROFILE = RECIPE_SHOP_PROFILE; // เปลี่ยนจ�
 - **Next.js 16** (App Router, Route Handler) + **React 19**
 - **TypeScript** แบบ strict
 - **Node.js** เป็น runtime ของ server
-- **MySQL 8** ผ่าน `mysql2` (Docker Compose) + JSON fallback
+- **MySQL 8** ผ่าน `mysql2` (ติดตั้งตรงเครื่อง หรือ Docker) + JSON fallback
 - **n8n** เป็น AI orchestration workflow
 - **Groq API** (`llama-3.3-70b-versatile`) ผ่าน n8n
 - **Tailwind CSS 4** ผ่าน `@theme` token
@@ -219,20 +219,75 @@ npm run dev
 
 เปิด [http://localhost:3000](http://localhost:3000) — ค้นหาได้จาก `products.json`
 
-### เปิด MySQL
+### เปิด MySQL — เลือกทางที่สะดวก
+
+#### ทางที่ 1: ติดตั้งตรงเครื่อง (ไม่ต้องมี Docker)
+
+```bash
+winget install Oracle.MySQL --silent
+```
+
+ตัวติดตั้งแบบ silent จะวางไฟล์ไว้ที่ `C:\Program Files\MySQL\MySQL Server 8.4`
+แต่จะ **ไม่** init data dir และ **ไม่** ลงทะเบียน Windows service (เพราะต้องใช้สิทธิ์
+Administrator) ให้ทำเองดังนี้:
+
+```powershell
+# 1. สร้าง my.ini (ปรับ port ได้ถ้าชนกับโปรแกรมอื่น)
+$cfg = "C:\ProgramData\MySQL\MySQL Server 8.4\my.ini"
+#    [mysqld]
+#    basedir=C:/Program Files/MySQL/MySQL Server 8.4
+#    datadir=C:/ProgramData/MySQL/MySQL Server 8.4/Data
+#    port=3306
+#    character-set-server=utf8mb4
+#    collation-server=utf8mb4_0900_ai_ci
+
+# 2. init data dir (root จะได้ password ว่าง)
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" `
+    --defaults-file="$cfg" --initialize-insecure --console
+
+# 3. สร้าง user สำหรับแอป
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" --defaults-file="$cfg" -u root -e @"
+CREATE USER IF NOT EXISTS 'shopvoice'@'localhost' IDENTIFIED BY 'shopvoice';
+GRANT ALL PRIVILEGES ON shopvoice.* TO 'shopvoice'@'localhost';
+FLUSH PRIVILEGES;
+"@
+
+# 4. โหลด schema + seed
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" --defaults-file="$cfg" `
+    -u root --default-character-set=utf8mb4 -e "source C:/path/to/repo/db/schema.sql"
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" --defaults-file="$cfg" `
+    -u root --default-character-set=utf8mb4 -e "source C:/path/to/repo/db/seed.sql"
+
+# 5. สตาร์ทเซิร์ฟเวอร์ (ต้องรันทุกครั้งที่เปิดเครื่องใหม่ ถ้าไม่ได้ทำเป็น service)
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --defaults-file="$cfg" --console
+```
+
+> ถ้าต้องการให้ MySQL เปิดอัตโนมัติทุกครั้งที่เปิดเครื่อง ให้รัน PowerShell
+> **แบบ Administrator** ครั้งเดียว:
+> `mysqld --install MySQL84 --defaults-file="C:\ProgramData\MySQL\MySQL Server 8.4\my.ini"`
+> แล้ว `Start-Service MySQL84`
+
+#### ทางที่ 2: Docker
 
 ```bash
 docker compose up -d
 ```
 
 `docker-compose.yml` จะสร้าง MySQL 8.4 พร้อม mount `db/schema.sql` และ `db/seed.sql`
-เข้า `products` 13 รายการอัตโนมัติ จากนั้นสร้าง `.env.local`:
+เข้า `products` 13 รายการอัตโนมัติ (root password คือ `rootpassword` ต่างจากทางที่ 1)
+
+#### ตั้งค่าแอป
 
 ```bash
 cp .env.example .env.local
 ```
 
-### เปิด n8n + Groq
+`db/schema.sql` มี `CREATE DATABASE IF NOT EXISTS shopvoice` อยู่แล้ว
+จึงไม่ต้องสร้างฐานข้อมูลเอง
+
+### เปิด n8n + Groq (ไม่ต้องใช้ Docker)
+
+n8n เป็น Node application จึงรันตรงได้เลย:
 
 ```bash
 npm install -g n8n
@@ -241,20 +296,28 @@ n8n
 
 1. เปิด [http://localhost:5678](http://localhost:5678)
 2. **Workflows → Import from File** เลือก `n8n/shopvoice-workflow.json`
-3. ใส่คีย์ Groq: ไปที่ **Credentials → New → OpenAI** → ใช้ base URL
-   `https://api.groq.com/openai/v1` และ API key จาก [console.groq.com/keys](https://console.groq.com/keys)
-   (หรือตั้งเป็น env ของ n8n ด้วย `GROQ_API_KEY` ใน `%USERPROFILE%\.n8n\.env`
-   และ `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`)
-4. กด **Activate** แล้วเอา URL ที่ขึ้นมาใส่ `N8N_WEBHOOK_URL` ใน `.env.local`
-5. `npm run dev` ใหม่
+3. สร้าง credential สำหรับ Groq (ขั้นตอนเดียวที่ต้องทำเอง เพราะต้องใช้ API key ของคุณ):
+   - **Credentials → New Credential → Header Auth**
+   - Name: `Groq API`
+   - Header Name: `Authorization`
+   - Header Value: `Bearer gsk_xxxxxxxx` (ขอคีย์ฟรีได้ที่ [console.groq.com/keys](https://console.groq.com/keys))
+4. เปิด workflow → คลิก node **Call Groq API** → เลือก credential `Groq API`
+   (หลัง import โหนดนี้จะขึ้นเตือนว่า credential หายไป เพราะ credential เป็นของแต่ละ instance
+   และไม่ถูก export ไปพร้อมไฟล์ workflow)
+5. กด **Publish** แล้วเอา URL ที่ขึ้นมา (รูปแบบ `http://localhost:5678/webhook/...`) ใส่ `N8N_WEBHOOK_URL` ใน `.env.local`
+6. `npm run dev` ใหม่
+
+> ระบบใช้ n8n Credentials แทนการอ่าน `$env.GROQ_API_KEY` เพราะ n8n 2.x
+> บล็อกการอ่าน env var ใน node โดยค่าเริ่มต้น — วิธีนี้จึงไม่ต้องปิด security
+> และคีย์ไม่หลุดไปกับไฟล์ที่ commit ขึ้น Git
 
 ### ตรวจว่าทุกชั้นทำงาน
 
 ```bash
-curl http://localhost:3000/api/products   # ดูว่า source เป็น "mysql" แล้วหรือยัง
+curl http://localhost:3000/api/products   # ดูว่า source เป็น "database" แล้วหรือยัง
 ```
 
-`source` จะบอกว่าตอนนั้นระบบดึงข้อมูลจากไหน: `mysql` (MySQL), `json` (fallback),
+`source` จะบอกว่าตอนนั้นระบบดึงข้อมูลจากไหน: `database` (MySQL), `json` (fallback),
 หรือ `ai` (คำตอบจาก Groq)
 
 > **การตัดเสียงต้องใช้ Chrome หรือ Edge** เพราะเบราว์เซอร์อื่นยังไม่รองรับ
@@ -289,7 +352,7 @@ src/
 │   ├── CartDrawer.tsx          # ตะกร้าแบบ slide-over
 │   ├── CheckoutSummary.tsx     # สรุปคำสั่งซื้อ
 │   ├── SuggestionChips.tsx     # คำสั่งตัวอย่าง
-│   ├── SourceBadge.tsx         # ป้ายบอกแหล่งที่มา (mysql / json / ai)
+│   ├── SourceBadge.tsx         # ป้ายบอกแหล่งที่มา (database / json / ai)
 │   └── AiAnswerCard.tsx        # การ์ดคำตอบจาก Groq
 ├── hooks/
 │   ├── useSpeechRecognition.ts # wrapper Web Speech API
@@ -338,7 +401,7 @@ docker-compose.yml              # MySQL 8.4 สำหรับ dev
   "quantity": 0,
   "budget": { "max": 4000 },
   "sort": "relevance",
-  "source": "mysql",            // หรือ "json"
+  "source": "database",         // หรือ "json"
   "results": [
     {
       "product": { "id": "kbd-75", "name": "คีย์บอร์ดไร้สาย KBD-75", "price": 3290 },
@@ -376,7 +439,7 @@ docker-compose.yml              # MySQL 8.4 สำหรับ dev
 curl http://localhost:3000/api/products
 ```
 
-คืน `source` (`mysql` | `json`), `total` และ `products` ทั้งหมด
+คืน `source` (`database` | `json`), `total` และ `products` ทั้งหมด
 ใช้ตรวจว่าเชื่อมต่อฐานข้อมูลสำเร็จหรือยัง
 
 ### กฎการทำงาน
@@ -389,15 +452,22 @@ curl http://localhost:3000/api/products
 
 ## ผลการตรวจสอบ
 
-รันจริงด้วย `next start` และ mock n8n/Groq เพื่อพิสูจน์พฤติกรรมแต่ละชั้น:
+รันจริงด้วย `next start` โดยทดสอบทีละชั้น — JSON fallback, MySQL จริง,
+และ mock n8n/Groq:
 
 | การทดสอบ | ผล |
 | --- | --- |
 | `npm run lint` / `npm run build` | ผ่าน ไม่มี error |
-| 15 คำสั่งปกติ (ค้นหา/กรอง/ตะกร้า/เช็กเอาต์) | ผ่าน ผลตรงกับเวอร์ชันก่อนเพิ่ม MySQL |
+| 15 คำสั่งปกติ (ค้นหา/กรอง/ตะกร้า/เช็กเอาต์) — JSON path | ผ่าน |
+| ชุดเดียวกันบน **MySQL 8.4.9 จริง** | ผ่าน `source: "database"` และผลตรงกับ JSON path ทุกรายการ |
+| `db/schema.sql` + `db/seed.sql` โหลดลง MySQL | ผ่าน 13 แถว ภาษาไทยและอีโมจิครบ |
 | ค้นพิมพ์ผิด `คย์บอร์ด` → `คีย์บอร์ด` | ผ่าน (Dice coefficient) |
-| คำนอกโดเมน 4 เคส → `source: "ai"` | ผ่าน |
+| ค้นตามชื่อหมวด `ในหมวดเครื่องใช้ไฟฟ้า` | ผ่าน คืนสินค้าหมวดนั้น 1 รายการ |
+| คำนอกโดเมน 4 เคส → `source: "ai"` | ผ่าน (mock n8n + Groq) |
 | คำสั่ง `add` ที่ไม่พบสินค้า | ไม่หลุดไปหา AI ตามที่ออกแบบไว้ |
+| `systemPrompt` ที่ส่งถึง Groq | มาจาก `IT_SHOP_PROFILE` 777 ตัวอักษร ไม่ได้อยู่ใน workflow |
+| `n8n import:workflow` บน n8n 2.41.4 | ผ่าน (`Successfully imported 1 workflow`) |
+| Webhook ของ n8n รับ payload จริง | ผ่าน ไหลถึง node **Call Groq API** แล้ว |
 | `DATABASE_URL` ชี้ port ที่ไม่มีบริการ | ตอบ `source: "json"` ครบ 13 รายการ ไม่ crash |
 | `GET /api/voice` | `405` พร้อม header `Allow: POST` |
 
