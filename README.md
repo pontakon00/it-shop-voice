@@ -123,7 +123,17 @@
 ```jsonc
 // POST ไปยัง N8N_WEBHOOK_URL
 {
-  "query": "ทำผัดกะเพรา",
+  "query": "จอคอม 4k",                        // คำค้นที่ NLU ทำความสะอาดแล้ว
+  "transcript": "จอคอม 4k ราคาไม่เกิน 5000", // ประโยคเต็มของผู้ใช้
+  "catalog": [                                // สินค้าที่ดึงมาจากฐานข้อมูลจริง
+    {
+      "name": "จอมอนิเตอร์ 27 นิ้ว 4K IPS",
+      "category": "จอภาพ",
+      "price": 12900,
+      "stock": 5,
+      "rating": 4.7
+    }
+  ],
   "profile": {
     "key": "it-shop",
     "domain": "ร้านขายอุปกรณ์ไอที...",
@@ -137,8 +147,8 @@ workflow `n8n/shopvoice-workflow.json` มี 5 จุด:
 
 | โหนด | หน้าที่ |
 | --- | --- |
-| **Webhook** | รับ `{ query, profile }` |
-| **Build Prompt** | ประกอบ `system` + `user` message จาก `profile` (ไม่ hardcode โดเมน) |
+| **Webhook** | รับ `{ query, transcript, catalog, profile }` |
+| **Build Prompt** | ประกอบ `system` + `user` message จาก `profile` แล้วแทรก `CATALOG` (ไม่ hardcode โดเมน) |
 | **Call Groq API** | `llama-3.3-70b-versatile`, `temperature 0.3`, `response_format: json_object` — ยิงผ่าน HTTP Request node ที่ใช้ Header Auth credential |
 | **Parse Answer** | แกะ JSON → `{ answer, suggestions }` |
 | **Respond to Webhook** | คืน `{ answer, suggestions, model }` |
@@ -149,6 +159,40 @@ workflow `n8n/shopvoice-workflow.json` มี 5 จุด:
 
 > คำสั่งที่เป็น `add` / `remove` / `checkout` **จะไม่ถูกส่งให้ AI**
 > เพราะ AI ไม่ควรตีความความหมายของตะกร้า — ให้ระบบถามกลับผู้ใช้แทน
+
+### ทำไม AI ถึงไม่กุข้อมูล — CATALOG
+
+โมเดลไม่ได้ตอบจากความจำของตัวเอง แต่ตอบจาก `catalog` ที่ระบบดึงจากฐานข้อมูลมาแนบให้
+(`suggestProductsForAi` ใน `src/lib/productRepository.ts`)
+
+จุดที่ต่างจาก `searchProducts` คือ **ตัดเงื่อนไขงบและหมวดออก** เพราะกรณีที่ค้นไม่เจอ
+มักมาจาก "งบไม่ถึง" ไม่ใช่ไม่มีของ ผลที่เห็น:
+
+| คำถาม | ก่อนมี CATALOG | หลังมี CATALOG |
+| --- | --- | --- |
+| `จอคอม 4k ราคาไม่เกิน 5000` | ไม่พบสินค้า | มีจอ 27 นิ้ว 4K ราคา 12,900 สต็อก 5 |
+| `อยากทำผัดกะเพรา` | ไม่พบสินค้า | ไม่มีสินค้าที่ตรงกับคำถาม |
+
+เคสที่สอง `catalog` จะว่างโดยอัตโนมัติ เพราะการจับคู่ให้คะแนน 0 ทุกรายการ
+AI จึงตอบว่าไม่มีตามจริง แทนที่จะถูกยัดสินค้าไม่เกี่ยวข้องไปอ้าง
+
+ชื่อสินค้าถูกส่งใน `user` message เท่านั้น **ไม่ใช่ `system` prompt**
+เพราะข้อมูลจากฐานข้อมูลถือเป็น untrusted input — ถ้าอยู่ใน system prompt
+ผู้ใช้ที่ตั้งชื่อสินค้าว่า `ignore previous instructions` ได้
+
+> เรียกว่าเป็น RAG ได้ แต่ยังไม่ใช่ embedding — ใช้ Dice coefficient บน bigram
+> ตัวอักษรที่มีอยู่แล้ว เพราะ 13 สินค้าไม่จำเป็นต้องมี vector store
+
+### ทำไมต้องส่งทั้ง `query` และ `transcript`
+
+NLU ตัดคำฟุ่มออกจนบริบทภาษาไทยหาย เช่น
+
+```
+"ช่วยแนะนำสูตรอาหารอร่อยๆ"  →  query: "สูตรอา รอร่อยๆ"
+```
+
+`query` ใช้จับคู่กับ CATALOG ส่วน `transcript` ให้โมเดลเข้าใจว่าผู้ใช้ต้องการอะไรจริง
+Build Prompt จะใส่ทั้งสองบรรทัดพร้อมกัน และสั่งให้ตอบตามประโยคเต็ม
 
 ### หลักฐานว่า workflow เป็น Domain-Agnostic
 
@@ -232,34 +276,66 @@ winget install Oracle.MySQL --silent
 Administrator) ให้ทำเองดังนี้:
 
 ```powershell
-# 1. สร้าง my.ini (ปรับ port ได้ถ้าชนกับโปรแกรมอื่น)
+# 1. สร้าง my.ini — bind-address จำกัดให้รับเฉพาะเครื่องนี้
 $cfg = "C:\ProgramData\MySQL\MySQL Server 8.4\my.ini"
-#    [mysqld]
-#    basedir=C:/Program Files/MySQL/MySQL Server 8.4
-#    datadir=C:/ProgramData/MySQL/MySQL Server 8.4/Data
-#    port=3306
-#    character-set-server=utf8mb4
-#    collation-server=utf8mb4_0900_ai_ci
+@"
+[mysqld]
+basedir=C:/Program Files/MySQL/MySQL Server 8.4
+datadir=C:/ProgramData/MySQL/MySQL Server 8.4/Data
+port=3306
+bind-address=127.0.0.1
+character-set-server=utf8mb4
+collation-server=utf8mb4_0900_ai_ci
+default-time-zone=+07:00
+max_connections=100
+log-error=C:/ProgramData/MySQL/MySQL Server 8.4/error.log
 
-# 2. init data dir (root จะได้ password ว่าง)
+[client]
+port=3306
+default-character-set=utf8mb4
+"@ | Set-Content -Path $cfg -Encoding UTF8
+
+# 2. init data dir — ครั้งแรก root จะได้ password ว่าง (ขั้นตอนที่ 4 ไปตั้งให้)
 & "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" `
     --defaults-file="$cfg" --initialize-insecure --console
 
-# 3. สร้าง user สำหรับแอป
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" --defaults-file="$cfg" -u root -e @"
+# 3. สตาร์ทเซิร์ฟเวอร์ก่อน — mysql.exe จะเชื่อมต่อได้ก็ต่อเมื่อเซิร์ฟเวอร์รันแล้ว
+#    คำสั่งนี้จะรันค้างไว้ ให้เปิดเทอร์มินัลใหม่ไปทำขั้นตอนที่ 4-5 ต่อ
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --defaults-file="$cfg" --console
+```
+
+> ลำดับสำคัญ: `mysql.exe` เชื่อมต่อไม่ได้จนกว่า `mysqld` จะรันอยู่
+> ถ้าได้ `ERROR 2002 (Can't connect)` แปลว่ายังไม่ได้รันขั้นตอนที่ 3
+
+เปิดเทอร์มินัลใหม่:
+
+```powershell
+$mysql = "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe"
+
+# 4. ตั้งรหัสผ่าน root + สร้าง user สำหรับแอป
+#    สร้างเป็น 'localhost' เท่านั้น เพราะ bind-address ไม่ให้เข้าจากเครื่องอื่นอยู่แล้ว
+& $mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'change-me-root';"
+& $mysql -u root -pchange-me-root -e @"
 CREATE USER IF NOT EXISTS 'shopvoice'@'localhost' IDENTIFIED BY 'shopvoice';
 GRANT ALL PRIVILEGES ON shopvoice.* TO 'shopvoice'@'localhost';
 FLUSH PRIVILEGES;
 "@
 
-# 4. โหลด schema + seed
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" --defaults-file="$cfg" `
-    -u root --default-character-set=utf8mb4 -e "source C:/path/to/repo/db/schema.sql"
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" --defaults-file="$cfg" `
-    -u root --default-character-set=utf8mb4 -e "source C:/path/to/repo/db/seed.sql"
+# 5. โหลด schema + seed
+& $mysql -u root -pchange-me-root --default-character-set=utf8mb4 `
+    -e "source C:/path/to/repo/db/schema.sql"
+& $mysql -u root -pchange-me-root --default-character-set=utf8mb4 `
+    -e "source C:/path/to/repo/db/seed.sql"
+```
 
-# 5. สตาร์ทเซิร์ฟเวอร์ (ต้องรันทุกครั้งที่เปิดเครื่องใหม่ ถ้าไม่ได้ทำเป็น service)
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --defaults-file="$cfg" --console
+> เปลี่ยน `change-me-root` เป็นรหัสผ่านของคุณก่อนใช้งานจริง
+> ใส่รหัสผ่านต่อท้าย `-p` แบบนี้เพื่อความสั้นในเอกสารเท่านั้น — เวลาใช้งานจริงควรพิมพ์รหัสผ่านเอง
+> MySQL จะขึ้นเตือนเรื่อง password บน command line ซึ่งเป็นเรื่องปกติ
+
+ตั้งค่า `DATABASE_URL` ใน `.env.local` ให้ตรงกับ user ที่สร้าง:
+
+```bash
+DATABASE_URL="mysql://shopvoice:shopvoice@localhost:3306/shopvoice"
 ```
 
 > ถ้าต้องการให้ MySQL เปิดอัตโนมัติทุกครั้งที่เปิดเครื่อง ให้รัน PowerShell
@@ -293,6 +369,13 @@ n8n เป็น Node application จึงรันตรงได้เลย:
 npm install -g n8n
 n8n
 ```
+
+> n8n 2.x จะขึ้นหน้า **สร้าง owner account** ในครั้งแรก (อีเมล + รหัสผ่าน) ให้กรอกก่อนเข้า editor
+> ถ้าไม่อยากมี login บนเครื่อง dev ให้รันด้วย `$env:N8N_USER_MANAGEMENT_DISABLED="true"; n8n`
+>
+> ต้องรอให้เห็นบรรทัด `Editor is now accessible via http://localhost:5678`
+> ก่อนเปิดเบราว์เซอร์ (ใช้เวลา 10-20 วินาที) ถ้าเปิดเร็วเกินไปจะเจอ `Cannot GET /`
+> เพราะ frontend ยังไม่ได้ mount เสร็จ — ไม่ใช่ติดตั้งผิด
 
 1. เปิด [http://localhost:5678](http://localhost:5678)
 2. **Workflows → Import from File** เลือก `n8n/shopvoice-workflow.json`
@@ -464,6 +547,11 @@ curl http://localhost:3000/api/products
 | ค้นพิมพ์ผิด `คย์บอร์ด` → `คีย์บอร์ด` | ผ่าน (Dice coefficient) |
 | ค้นตามชื่อหมวด `ในหมวดเครื่องใช้ไฟฟ้า` | ผ่าน คืนสินค้าหมวดนั้น 1 รายการ |
 | คำนอกโดเมน 4 เคส → `source: "ai"` | ผ่าน (mock n8n + Groq) |
+| `จอคอม 4k ราคาไม่เกิน 5000` → CATALOG | ผ่าน AI ได้จอ 27 นิ้ว 4K ราคา 12,900 สต็อก 5 (เดิมตอบ "ไม่พบสินค้า") |
+| `อยากทำผัดกะเพรา` → CATALOG ว่าง | ผ่าน AI ตอบว่าไม่มี ไม่ถูกยัดสินค้าไม่เกี่ยวข้องให้อ้าง |
+| `transcript` ที่ NLU ทำรูป | ผ่าน โมเดลเห็นประโยคเต็ม "ช่วยแนะนำสูตรอาหารอร่อยๆ" ไม่ใช่ "สูตรอา รอร่อยๆ" |
+| Build Prompt + Parse Answer **จากไฟล์ workflow จริง** | ผ่าน mock ที่โหลด jsCode จาก `shopvoice-workflow.json` มารัน ไม่ใช่ prompt จำลอง |
+| Groq API จริง | ยังไม่ได้ทดสอบ — ต้องมี API key ของผู้ใช้ใน n8n credential |
 | คำสั่ง `add` ที่ไม่พบสินค้า | ไม่หลุดไปหา AI ตามที่ออกแบบไว้ |
 | `systemPrompt` ที่ส่งถึง Groq | มาจาก `IT_SHOP_PROFILE` 777 ตัวอักษร ไม่ได้อยู่ใน workflow |
 | `n8n import:workflow` บน n8n 2.41.4 | ผ่าน (`Successfully imported 1 workflow`) |
@@ -479,5 +567,8 @@ curl http://localhost:3000/api/products
 - ไม่มีระบบล็อกอิน/สิทธิ์ผู้ใช้
 - การตัดเสียงพึ่ง `SpeechRecognition` ของเบราว์เซอร์ จึงรองรับเฉพาะ Chromium
 - ตะกร้าเก็บใน `localStorage` จึงยังไม่ซิงก์ข้ามอุปกรณ์
+- ยังไม่ได้ทดสอบกับ Groq API จริง (ต้องมี API key ใน n8n credential)
 - ขั้นต่อไป: เพิ่ม intent `เปรียบเทียบสินค้า`, รองรับการสั่งซื้อหลายรายการ
-  ในประโยคเดียว, เพิ่ม RAG บน catalog และประวัติคำสั่งลง MySQL
+  ในประโยคเดียว, บันทึกประวัติคำสั่งลง MySQL
+- เมื่อสินค้าเยอะขึ้นจาก 13 รายการ ควรเปลี่ยนจาก Dice coefficient
+  ไปใช้ embedding + vector store เพื่อความแม่นยำที่ดีกว่า

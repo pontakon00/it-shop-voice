@@ -150,3 +150,28 @@ export async function resolveTarget(
 export async function listProducts(): Promise<{ products: Product[]; source: DataSource }> {
   return fetchCandidates({ budget: {}, limit: MAX_CANDIDATES });
 }
+
+/**
+ * ดึงสินค้าที่ "ใกล้เคียง" คำค้น เพื่อแนบให้ AI อ้างอิงได้จริง
+ *
+ * ต่างจาก `searchProducts` ตรงที่ตัดเงื่อนไขหมวดและงบออก
+ * เพราะกรณีที่ค้นไม่เจอมักเกิดจากการที่ "งบไม่ถึง" ไม่ใช่ไม่มีของ
+ * ถ้าไม่ตัดงบออก AI จะไม่มีโอกาสบอกว่า "มีของ แต่เกินงบคุณ"
+ *
+ * คืนรายการว่างเมื่อคำถามไม่เกี่ยวข้องกับสินค้าในร้านจริง ๆ
+ * เช่น "อยากทำผัดกะเพรา" — ซึ่งถือว่าถูกต้อง เพราะ AI ต้องได้รับรู้ว่าไม่มี
+ * แล้วตอบตามจริง แทนที่จะถูกยัดสินค้าไม่เกี่ยวข้องให้ไปอ้าง
+ *
+ * ใช้ `fetchCandidates` เสมอ จึงได้ผลเหมือนกันทั้งเส้นทาง MySQL และ JSON
+ */
+export async function suggestProductsForAi(query: string, limit = 5): Promise<ProductMatch[]> {
+  if (!query.trim()) return [];
+
+  const { products } = await fetchCandidates({ budget: {}, limit: MAX_CANDIDATES });
+
+  const ranked = rankProducts(products, { query, sort: "relevance", limit: MAX_CANDIDATES });
+
+  // กรอง score 0 ออกอีกชั้น: ถ้าภายหลังมีคนแก้ rankProducts ให้คืนทุกแถว
+  // ฟังก์ชันนี้ก็ยังจะไม่ส่งสินค้าไม่เกี่ยวข้องไปให้ AI
+  return ranked.filter((match) => match.score > 0).slice(0, limit);
+}

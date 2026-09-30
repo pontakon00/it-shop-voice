@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { askAiFallback, type AiAnswer } from "@/src/lib/aiFallback";
+import { askAiFallback, toAiCatalog, type AiAnswer } from "@/src/lib/aiFallback";
 import { SAMPLE_COMMANDS } from "@/src/lib/catalog";
 import { CATEGORY_LABELS } from "@/src/lib/matching";
 import { parseCommand } from "@/src/lib/nlu";
-import { resolveTarget, searchProducts } from "@/src/lib/productRepository";
+import { resolveTarget, searchProducts, suggestProductsForAi } from "@/src/lib/productRepository";
 import type { AnswerSource, VoiceResponse } from "@/src/lib/types";
 
 const MAX_TEXT_LENGTH = 200;
@@ -216,12 +216,18 @@ export async function POST(request: Request): Promise<NextResponse<VoiceResponse
       const conditionText = conditions.length > 0 ? ` (${conditions.join(", ")})` : "";
       const subject = command.query ? `ที่ตรงกับ "${command.query}"` : "ตามที่คุณบอก";
 
-      // ไม่พบสินค้าในฐานข้อมูล → ส่งให้ n8n → Groq ตอบแทน แทนที่จะตอบว่า "ไม่พบ"
+      // ไม่พบสินค้าในฐานข้อมูล → ดึงสินค้าที่ใกล้เคียงมาแนบ แล้วส่งให้ n8n → Groq ตอบแทน
+      // ทำได้เพราะกรณีที่ไม่เจอมักมาจาก "งบไม่ถึง" ไม่ใช่ไม่มีของ — AI จึงบอกได้ว่าเกินงบ
       let answerSource: AnswerSource = source;
       let aiAnswer: AiAnswer | undefined;
 
       if (total === 0 && command.query) {
-        const ai = await askAiFallback({ query: command.query, transcript: text });
+        const nearMisses = await suggestProductsForAi(command.query);
+        const ai = await askAiFallback({
+          query: command.query,
+          transcript: text,
+          catalog: toAiCatalog(nearMisses),
+        });
         if (ai) {
           answerSource = "ai";
           aiAnswer = ai;
